@@ -29,6 +29,30 @@ typedef struct {
   uint32_t capacity;
 } smt_state_t;
 
+const char *SMT_DEFAULT_PERSONAL = "sparsemerkletree";
+int smt_blake2b_init(blake2b_state *S, size_t outlen) {
+  blake2b_param P[1];
+
+  if ((!outlen) || (outlen > BLAKE2B_OUTBYTES)) return -1;
+
+  P->digest_length = (uint8_t)outlen;
+  P->key_length = 0;
+  P->fanout = 1;
+  P->depth = 1;
+  store32(&P->leaf_length, 0);
+  store32(&P->node_offset, 0);
+  store32(&P->xof_length, 0);
+  P->node_depth = 0;
+  P->inner_length = 0;
+  memset(P->reserved, 0, sizeof(P->reserved));
+  memset(P->salt, 0, sizeof(P->salt));
+  memset(P->personal, 0, sizeof(P->personal));
+  for (int i = 0; i < BLAKE2B_PERSONALBYTES; ++i) {
+    (P->personal)[i] = SMT_DEFAULT_PERSONAL[i];
+  }
+  return blake2b_init_param(S, P);
+}
+
 void smt_state_init(smt_state_t *state, smt_pair_t *buffer, uint32_t capacity) {
   state->pairs = buffer;
   state->len = 0;
@@ -165,7 +189,7 @@ void _smt_merge(const uint8_t *lhs, const uint8_t *rhs, uint8_t *output) {
     memcpy(output, lhs, 32);
   } else {
     blake2b_state blake2b_ctx;
-    blake2b_init(&blake2b_ctx, 32);
+    smt_blake2b_init(&blake2b_ctx, 32);
     blake2b_update(&blake2b_ctx, lhs, 32);
     blake2b_update(&blake2b_ctx, rhs, 32);
     blake2b_final(&blake2b_ctx, output, 32);
@@ -200,7 +224,7 @@ int smt_calculate_root(uint8_t *buffer, const smt_state_t *pairs,
         if (_smt_zero_value(pairs->pairs[leave_index].value)) {
           memset(stack_values[stack_top], 0, 32);
         } else {
-          blake2b_init(&blake2b_ctx, 32);
+          smt_blake2b_init(&blake2b_ctx, 32);
           blake2b_update(&blake2b_ctx, pairs->pairs[leave_index].key,
                          SMT_KEY_BYTES);
           blake2b_update(&blake2b_ctx, pairs->pairs[leave_index].value,
