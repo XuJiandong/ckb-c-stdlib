@@ -15,3 +15,6 @@ matrix:
     - name: Format
       script:
         - make fmt
+    - name: Tests
+      script:
+        - make test
