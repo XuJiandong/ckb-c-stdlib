@@ -3,16 +3,13 @@
 
 #include <blake2b.h>
 
-#include "blockchain.h"
 #include "ckb_consts.h"
-#include "secp256k1_helper.h"
 
 #define CKB_IDENTITY_LEN 21
 #define RECID_INDEX 64
 #define ONE_BATCH_SIZE 32768
 #define PUBKEY_SIZE 33
 #define MAX_WITNESS_SIZE 32768
-#define SIGNATURE_SIZE 65
 #define BLAKE2B_BLOCK_SIZE 32
 #define BLAKE160_SIZE 20
 
@@ -39,6 +36,11 @@ typedef struct CkbIdentityType {
 enum IdentityFlagsType {
   IdentityFlagsPubkeyHash = 0,
   IdentityFlagsOwnerLock = 1,
+  IdentityFlagsAcp = 2,
+  IdentityFlagsRsaDl = 3,
+  IdentityFlagsRsaExec = 4,
+  IdentityFlagsIso9796_2Dl = 5,
+  IdentityFlagsIso9796_2Exec = 6,
 };
 
 static int extract_witness_lock(uint8_t *witness, uint64_t len,
@@ -84,7 +86,8 @@ int load_and_hash_witness(blake2b_state *ctx, size_t start, size_t index,
 }
 
 int verify_secp256k1_blake160_sighash_all(uint8_t *pubkey_hash,
-                                          uint8_t *signature_bytes) {
+                                          uint8_t *signature_bytes,
+                                          uint32_t signature_size) {
   int ret;
   uint64_t len = 0;
   unsigned char temp[MAX_WITNESS_SIZE];
@@ -107,9 +110,7 @@ int verify_secp256k1_blake160_sighash_all(uint8_t *pubkey_hash,
   if (ret != 0) {
     return ERROR_IDENTITY_ENCODING;
   }
-  if (lock_bytes_seg.size < SIGNATURE_SIZE) {
-    return ERROR_IDENTITY_ARGUMENTS_LEN;
-  }
+
   /* Load tx hash */
   unsigned char tx_hash[BLAKE2B_BLOCK_SIZE];
   len = BLAKE2B_BLOCK_SIZE;
@@ -234,9 +235,11 @@ bool is_lock_script_hash_present(uint8_t *lock_script_hash) {
   return false;
 }
 
-int ckb_verify_identity(CkbIdentityType *id, uint8_t *signature) {
+int ckb_verify_identity(CkbIdentityType *id, uint8_t *signature,
+                        uint32_t signature_size) {
   if (id->flags == IdentityFlagsPubkeyHash) {
-    return verify_secp256k1_blake160_sighash_all(id->blake160, signature);
+    return verify_secp256k1_blake160_sighash_all(id->blake160, signature,
+                                                 signature_size);
   } else if (id->flags == IdentityFlagsOwnerLock) {
     if (is_lock_script_hash_present(id->blake160)) {
       return 0;
