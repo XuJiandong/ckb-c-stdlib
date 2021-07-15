@@ -4,6 +4,7 @@
 #include <blake2b.h>
 
 #include "ckb_consts.h"
+#include "ckb_swappable_signatures.h"
 
 #define CKB_IDENTITY_LEN 21
 #define RECID_INDEX 64
@@ -12,6 +13,8 @@
 #define MAX_WITNESS_SIZE 32768
 #define BLAKE2B_BLOCK_SIZE 32
 #define BLAKE160_SIZE 20
+#define SECP256K1_SIGNATURE_SIZE 65
+#define SECP256K1_MESSAGE_SIZE 32
 
 enum CkbIdentityErrorCode {
   ERROR_IDENTITY_ARGUMENTS_LEN = -1,
@@ -42,6 +45,11 @@ enum IdentityFlagsType {
   IdentityFlagsIso9796_2Dl = 5,
   IdentityFlagsIso9796_2Exec = 6,
 };
+
+typedef int (*validate_signature_t)(void *prefilled_data, const uint8_t *sig,
+                                    size_t sig_len, const uint8_t *msg,
+                                    size_t msg_len, uint8_t *output,
+                                    size_t *output_len);
 
 static int extract_witness_lock(uint8_t *witness, uint64_t len,
                                 mol_seg_t *lock_bytes_seg) {
@@ -85,14 +93,69 @@ int load_and_hash_witness(blake2b_state *ctx, size_t start, size_t index,
   return CKB_SUCCESS;
 }
 
-int verify_secp256k1_blake160_sighash_all(uint8_t *pubkey_hash,
-                                          uint8_t *signature_bytes,
-                                          uint32_t signature_size) {
+int validate_signature_secp256k1(void *prefilled_data, const uint8_t *sig,
+                                 size_t sig_len, const uint8_t *msg,
+                                 size_t msg_len, uint8_t *output,
+                                 size_t *output_len) {
+  (void)prefilled_data;
+  int ret = 0;
+  if (*output_len < BLAKE160_SIZE) {
+    return ERROR_IDENTITY_ARGUMENTS_LEN;
+  }
+  if (sig_len != SECP256K1_SIGNATURE_SIZE) {
+    return ERROR_IDENTITY_ARGUMENTS_LEN;
+  }
+  if (msg_len != SECP256K1_MESSAGE_SIZE) {
+    return ERROR_IDENTITY_ARGUMENTS_LEN;
+  }
+
+  /* Load signature */
+  secp256k1_context context;
+  uint8_t secp_data[CKB_SECP256K1_DATA_SIZE];
+  ret = ckb_secp256k1_custom_verify_only_initialize(&context, secp_data);
+  if (ret != 0) {
+    return ret;
+  }
+
+  secp256k1_ecdsa_recoverable_signature signature;
+  if (secp256k1_ecdsa_recoverable_signature_parse_compact(
+          &context, &signature, sig, sig[RECID_INDEX]) == 0) {
+    return ERROR_IDENTITY_SECP_PARSE_SIGNATURE;
+  }
+
+  /* Recover pubkey */
+  secp256k1_pubkey pubkey;
+  if (secp256k1_ecdsa_recover(&context, &pubkey, &signature, msg) != 1) {
+    return ERROR_IDENTITY_SECP_RECOVER_PUBKEY;
+  }
+
+  uint8_t temp[PUBKEY_SIZE];
+  size_t pubkey_size = PUBKEY_SIZE;
+  if (secp256k1_ec_pubkey_serialize(&context, temp, &pubkey_size, &pubkey,
+                                    SECP256K1_EC_COMPRESSED) != 1) {
+    return ERROR_IDENTITY_SECP_SERIALIZE_PUBKEY;
+  }
+  blake2b_state ctx;
+  blake2b_init(&ctx, BLAKE2B_BLOCK_SIZE);
+  blake2b_update(&ctx, temp, pubkey_size);
+  blake2b_final(&ctx, temp, BLAKE2B_BLOCK_SIZE);
+
+  memcpy(output, temp, BLAKE160_SIZE);
+  *output_len = BLAKE160_SIZE;
+
+  return ret;
+}
+
+int generate_sighash_all(uint8_t *msg, size_t msg_len) {
   int ret;
   uint64_t len = 0;
   unsigned char temp[MAX_WITNESS_SIZE];
   uint64_t read_len = MAX_WITNESS_SIZE;
   uint64_t witness_len = MAX_WITNESS_SIZE;
+
+  if (msg_len < BLAKE2B_BLOCK_SIZE) {
+    return ERROR_IDENTITY_ARGUMENTS_LEN;
+  }
 
   /* Load witness of first input */
   ret = ckb_load_witness(temp, &read_len, 0, 0, CKB_SOURCE_GROUP_INPUT);
@@ -123,7 +186,6 @@ int verify_secp256k1_blake160_sighash_all(uint8_t *pubkey_hash,
   }
 
   /* Prepare sign message */
-  unsigned char message[BLAKE2B_BLOCK_SIZE];
   blake2b_state blake2b_ctx;
   blake2b_init(&blake2b_ctx, BLAKE2B_BLOCK_SIZE);
   blake2b_update(&blake2b_ctx, tx_hash, BLAKE2B_BLOCK_SIZE);
@@ -171,41 +233,28 @@ int verify_secp256k1_blake160_sighash_all(uint8_t *pubkey_hash,
     i += 1;
   }
 
-  blake2b_final(&blake2b_ctx, message, BLAKE2B_BLOCK_SIZE);
+  blake2b_final(&blake2b_ctx, msg, BLAKE2B_BLOCK_SIZE);
 
-  /* Load signature */
-  secp256k1_context context;
-  uint8_t secp_data[CKB_SECP256K1_DATA_SIZE];
-  ret = ckb_secp256k1_custom_verify_only_initialize(&context, secp_data);
+  return 0;
+}
+
+int verify_sighash_all(uint8_t *pubkey_hash, uint8_t *sig, uint32_t sig_len,
+                       validate_signature_t func) {
+  int ret = 0;
+  uint8_t msg[BLAKE2B_BLOCK_SIZE];
+  ret = generate_sighash_all(msg, sizeof(msg));
+  if (ret != 0) {
+    return ret;
+  }
+  uint8_t output_pubkey_hash[BLAKE160_SIZE];
+  size_t output_len = BLAKE160_SIZE;
+  ret = func(NULL, sig, sig_len, msg, sizeof(msg), output_pubkey_hash,
+             &output_len);
   if (ret != 0) {
     return ret;
   }
 
-  secp256k1_ecdsa_recoverable_signature signature;
-  if (secp256k1_ecdsa_recoverable_signature_parse_compact(
-          &context, &signature, signature_bytes,
-          signature_bytes[RECID_INDEX]) == 0) {
-    return ERROR_IDENTITY_SECP_PARSE_SIGNATURE;
-  }
-
-  /* Recover pubkey */
-  secp256k1_pubkey pubkey;
-  if (secp256k1_ecdsa_recover(&context, &pubkey, &signature, message) != 1) {
-    return ERROR_IDENTITY_SECP_RECOVER_PUBKEY;
-  }
-
-  /* Check pubkey hash */
-  size_t pubkey_size = PUBKEY_SIZE;
-  if (secp256k1_ec_pubkey_serialize(&context, temp, &pubkey_size, &pubkey,
-                                    SECP256K1_EC_COMPRESSED) != 1) {
-    return ERROR_IDENTITY_SECP_SERIALIZE_PUBKEY;
-  }
-
-  blake2b_init(&blake2b_ctx, BLAKE2B_BLOCK_SIZE);
-  blake2b_update(&blake2b_ctx, temp, pubkey_size);
-  blake2b_final(&blake2b_ctx, temp, BLAKE2B_BLOCK_SIZE);
-
-  if (memcmp(pubkey_hash, temp, BLAKE160_SIZE) != 0) {
+  if (memcmp(pubkey_hash, output_pubkey_hash, BLAKE160_SIZE) != 0) {
     return ERROR_IDENTITY_PUBKEY_BLAKE160_HASH;
   }
 
@@ -221,10 +270,10 @@ bool is_lock_script_hash_present(uint8_t *lock_script_hash) {
     err = ckb_checked_load_cell_by_field(buff, &len, 0, i, CKB_SOURCE_INPUT,
                                          CKB_CELL_FIELD_LOCK_HASH);
     if (err == CKB_INDEX_OUT_OF_BOUND) {
-      return false;
+      break;
     }
     if (err != 0) {
-      return false;
+      break;
     }
 
     if (memcmp(lock_script_hash, buff, BLAKE160_SIZE) == 0) {
@@ -235,11 +284,10 @@ bool is_lock_script_hash_present(uint8_t *lock_script_hash) {
   return false;
 }
 
-int ckb_verify_identity(CkbIdentityType *id, uint8_t *signature,
-                        uint32_t signature_size) {
+int ckb_verify_identity(CkbIdentityType *id, uint8_t *sig, uint32_t sig_len) {
   if (id->flags == IdentityFlagsPubkeyHash) {
-    return verify_secp256k1_blake160_sighash_all(id->blake160, signature,
-                                                 signature_size);
+    return verify_sighash_all(id->blake160, sig, sig_len,
+                              validate_signature_secp256k1);
   } else if (id->flags == IdentityFlagsOwnerLock) {
     if (is_lock_script_hash_present(id->blake160)) {
       return 0;

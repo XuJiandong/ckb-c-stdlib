@@ -91,8 +91,12 @@ typedef struct {
 #define RISCV_PGSIZE 4096
 #define ROUNDUP(a, b) ((((a)-1) / (b) + 1) * (b))
 #define ROUNDDOWN(a, b) ((a) / (b) * (b))
+#ifndef MAX
 #define MAX(a, b) ((a) > (b) ? (a) : (b))
+#endif
+#ifndef MIN
 #define MIN(a, b) ((a) < (b) ? (a) : (b))
+#endif
 
 #define ERROR_CONTEXT_FAILURE -21
 #define ERROR_INVALID_ELF -22
