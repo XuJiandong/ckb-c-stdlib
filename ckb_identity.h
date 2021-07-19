@@ -4,7 +4,6 @@
 #include <blake2b.h>
 
 #include "ckb_consts.h"
-#include "ckb_swappable_signatures.h"
 
 #define CKB_IDENTITY_LEN 21
 #define RECID_INDEX 64
@@ -28,6 +27,7 @@ enum CkbIdentityErrorCode {
   ERROR_IDENTITY_PUBKEY_BLAKE160_HASH = -31,
   // new error code
   ERROR_IDENTITY_LOCK_SCRIPT_HASH_NOT_FOUND = 70,
+  ERROR_IDENTITY_WRONG_ARGS,
 };
 
 typedef struct CkbIdentityType {
@@ -40,10 +40,6 @@ enum IdentityFlagsType {
   IdentityFlagsPubkeyHash = 0,
   IdentityFlagsOwnerLock = 1,
   IdentityFlagsAcp = 2,
-  IdentityFlagsRsaDl = 3,
-  IdentityFlagsRsaExec = 4,
-  IdentityFlagsIso9796_2Dl = 5,
-  IdentityFlagsIso9796_2Exec = 6,
 };
 
 typedef int (*validate_signature_t)(void *prefilled_data, const uint8_t *sig,
@@ -286,6 +282,9 @@ bool is_lock_script_hash_present(uint8_t *lock_script_hash) {
 
 int ckb_verify_identity(CkbIdentityType *id, uint8_t *sig, uint32_t sig_len) {
   if (id->flags == IdentityFlagsPubkeyHash) {
+    if (sig == NULL || sig_len != SECP256K1_SIGNATURE_SIZE) {
+      return ERROR_IDENTITY_WRONG_ARGS;
+    }
     return verify_sighash_all(id->blake160, sig, sig_len,
                               validate_signature_secp256k1);
   } else if (id->flags == IdentityFlagsOwnerLock) {
