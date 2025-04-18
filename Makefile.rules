@@ -1,0 +1,74 @@
+CC := clang
+LD := ld.lld
+OBJCOPY := llvm-objcopy
+AR := llvm-ar
+
+CFLAGS += --target=riscv64 -march=rv64imc_zba_zbb_zbc_zbs
+CFLAGS += -g -O2 -fdata-sections -ffunction-sections
+CFLAGS += -fno-builtin
+
+LDFLAGS := -static --gc-sections
+
+L = $(if $(strip $(VERBOSE)),,@)
+
+# check compiler, clang 18+
+ifeq ($(shell $(CC) -v 2>&1 | grep clang),)
+$(error Compiler is not clang)
+endif
+
+ifeq ($(shell $(LD) -v 2>&1 | grep LLD),)
+$(error linker is not ld.lld)
+endif
+
+ifneq ($(shell [ `$(CC) -v 2>&1 | grep -o "version .*" | cut -f2 -d' ' | cut -f1 -d'.'` -ge 18 ] && echo ok),ok)
+$(error Requires at least clang 18)
+endif
+
+ifeq ($(SRC_PATH),)
+$(error SRC_PATH is not set)
+endif
+
+SRC_PATH := $(abspath $(SRC_PATH))
+
+ifeq ($(PROJECT_NAME),)
+$(error PROJECT_NAME is not set)
+endif
+
+
+BUILD_DIR := build
+BIN_DIR := $(BUILD_DIR)/bin
+OBJ_DIR := $(BUILD_DIR)/obj
+
+INCLUDES_PATH += $(SRC_PATH) $(CKB_C_STDLIB)/libc $(CKB_C_STDLIB)
+
+SRC_FILES += $(abspath $(foreach libdir, $(SRC_PATH), $(shell find $(libdir) -name '*.[c]')))
+OBJECT_FILES += $(addprefix $(OBJ_DIR), $(addsuffix .o, $(basename $(foreach f, $(SRC_FILES), $(shell echo $(f) | sed "s|$(SRC_PATH)||" 2>/dev/null)))))
+
+VPATH = $(SRC_PATH)
+
+all: $(BIN_DIR)/$(PROJECT_NAME)
+
+prepare:
+	@mkdir -p $(BIN_DIR)
+	@mkdir -p $(OBJ_DIR)
+
+$(OBJ_DIR)/%.o: %.c prepare
+	@echo "[CC]   $@"
+	@$(L)$(call cc_cmdline,$(INCLUDES_PATH), $(DEFINES),$<,$@)
+
+$(BIN_DIR)/$(PROJECT_NAME): $(OBJECT_FILES)
+	@echo "[LINK] $(BIN_DIR)/$(PROJECT_NAME)"
+	@$(L)$(call link_cmdline,$(OBJECT_FILES),$(BIN_DIR)/$(PROJECT_NAME))
+
+cc_cmdline = $(CC) -c $(CFLAGS) $(addprefix -D,$(2)) $(addprefix -I,$(1)) -o $(4) $(3)
+link_cmdline = $(LD) $(LDFLAGS) -o $(2) $(1)
+
+list_info:
+	@echo "CKB_C_STDLIB=$(CKB_C_STDLIB)"
+	@echo "CFLAGS=$(CFLAGS)"
+	@echo "LDFLAGS=$(LDFLAGS)"
+
+
+.phony: all clean list_info
+
+
