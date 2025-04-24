@@ -1,3 +1,11 @@
+# usage
+# CKB_C_STDLIB := ../ckb-c-stdlib
+# SRC_PATH := src
+# PROJECT_NAME := test-makefile
+# enable printf
+# DEFINES := CKB_C_STDLIB_PRINTF
+# include Makefile.rules
+
 CC := clang
 LD := ld.lld
 OBJCOPY := llvm-objcopy
