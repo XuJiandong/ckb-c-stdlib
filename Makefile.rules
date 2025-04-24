@@ -3,8 +3,10 @@ LD := ld.lld
 OBJCOPY := llvm-objcopy
 AR := llvm-ar
 
+OPT_LEVEL ?= -O2
+
 CFLAGS += --target=riscv64 -march=rv64imc_zba_zbb_zbc_zbs
-CFLAGS += -g -O2 -fdata-sections -ffunction-sections
+CFLAGS += -g $(OPT_LEVEL) -fdata-sections -ffunction-sections
 CFLAGS += -fno-builtin
 
 LDFLAGS := -static --gc-sections
@@ -43,6 +45,7 @@ INCLUDES_PATH += $(SRC_PATH) $(CKB_C_STDLIB)/libc $(CKB_C_STDLIB)
 
 SRC_FILES += $(abspath $(foreach libdir, $(SRC_PATH), $(shell find $(libdir) -name '*.[c]')))
 OBJECT_FILES += $(addprefix $(OBJ_DIR), $(addsuffix .o, $(basename $(foreach f, $(SRC_FILES), $(shell echo $(f) | sed "s|$(SRC_PATH)||" 2>/dev/null)))))
+OBJECT_FILES += $(OBJ_DIR)/impl.o
 
 VPATH = $(SRC_PATH)
 
@@ -52,13 +55,20 @@ prepare:
 	@mkdir -p $(BIN_DIR)
 	@mkdir -p $(OBJ_DIR)
 
+
+# contains all implementation of stdlib functions
+$(OBJ_DIR)/impl.o: $(CKB_C_STDLIB)/libc/src/impl.c prepare
+	$(L)$(call cc_cmdline,$(INCLUDES_PATH), $(DEFINES),$<,$@)
+
 $(OBJ_DIR)/%.o: %.c prepare
 	@echo "[CC]   $@"
-	@$(L)$(call cc_cmdline,$(INCLUDES_PATH), $(DEFINES),$<,$@)
+	$(L)$(call cc_cmdline,$(INCLUDES_PATH), $(DEFINES) CKB_DECLARATION_ONLY,$<,$@)
 
 $(BIN_DIR)/$(PROJECT_NAME): $(OBJECT_FILES)
 	@echo "[LINK] $(BIN_DIR)/$(PROJECT_NAME)"
-	@$(L)$(call link_cmdline,$(OBJECT_FILES),$(BIN_DIR)/$(PROJECT_NAME))
+	$(L)$(call link_cmdline,$(OBJECT_FILES),$(BIN_DIR)/$(PROJECT_NAME))
+	$(L)cp $@ $@.debug
+	$(L)$(OBJCOPY) --strip-debug --strip-all $@
 
 cc_cmdline = $(CC) -c $(CFLAGS) $(addprefix -D,$(2)) $(addprefix -I,$(1)) -o $(4) $(3)
 link_cmdline = $(LD) $(LDFLAGS) -o $(2) $(1)
@@ -68,7 +78,9 @@ list_info:
 	@echo "CFLAGS=$(CFLAGS)"
 	@echo "LDFLAGS=$(LDFLAGS)"
 
+clean:
+	@rm -rf $(BUILD_DIR)
 
-.phony: all clean list_info
+.phony: all clean list_info prepare
 
 
